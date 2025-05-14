@@ -7,18 +7,13 @@ import torch
 from torchvision import models, transforms
 import subprocess
 
-# Modelo preentrenado
+# --- Modelo y Clasificación (sin cambios en su lógica interna) ---
 model = models.resnet18(pretrained=True)
 model.eval()
 
-# Índices de ImageNet
-dog_indices = set(range(151, 269))    # Perros
-cat_indices = set([281, 282, 283, 284, 285])  # Gatos
+dog_indices = set(range(151, 269))
+cat_indices = set([281, 282, 283, 284, 285])
 
-# Variables globales
-last_photo_path = None
-
-# Preprocesamiento
 def preprocess_image(image_path):
     preprocess = transforms.Compose([
         transforms.Resize(256),
@@ -30,7 +25,6 @@ def preprocess_image(image_path):
     img = Image.open(image_path).convert('RGB')
     return preprocess(img).unsqueeze(0)
 
-# Clasificación
 def classify_image(image_path):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     input_tensor = preprocess_image(image_path).to(device)
@@ -46,76 +40,172 @@ def classify_image(image_path):
     else:
         return "Ni perro ni gato"
 
-# Función para capturar imagen y clasificar
+# --- Variables Globales ---
+last_photo_path = None
+tk_image_ref = None
+# Aumentar base font size para mejor visibilidad
+BASE_FONT_SIZE = 14  # Ajustado para pantalla pequeña pero más legible
+
+# --- Funciones de la Interfaz ---
 def tomar_y_clasificar():
-    global last_photo_path
-    status_label.config(text="Capturando imagen...")
+    global last_photo_path, tk_image_ref
+
+    status_label.config(text="Capturando...")
     root.update_idletasks()
 
     save_dir = "fotos"
     os.makedirs(save_dir, exist_ok=True)
-    nombre = f"captura_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    nombre = f"captura_{timestamp}.jpg"
     ruta = os.path.join(save_dir, nombre)
 
-    # Captura con libcamera-jpeg usando subprocess
     try:
-        subprocess.run(["libcamera-jpeg", "-o", ruta, "-t", "2000"], check=True)
+        subprocess.run(["libcamera-jpeg", "-n", "-o", ruta, "-t", "200"], check=True)
+        status_label.config(text="Clasificando...")
+        root.update_idletasks()
     except subprocess.CalledProcessError as e:
-        status_label.config(text=f"Error al capturar: {e}")
+        status_label.config(text=f"Error captura: {e}")
+        foto_button.config(state=tk.NORMAL)
+        limpiar_button.config(state=tk.DISABLED)
+        return
+    except FileNotFoundError:
+        status_label.config(text="Error: libcamera-jpeg no encontrado.")
+        foto_button.config(state=tk.NORMAL)
+        limpiar_button.config(state=tk.DISABLED)
         return
 
-    # Mostrar imagen más grande
+    # Mostrar imagen capturada
     try:
-        img = Image.open(ruta)
-        img = img.resize((500, 400))
-        tk_img = ImageTk.PhotoImage(img)
-        img_label.config(image=tk_img)
-        img_label.image = tk_img
-        last_photo_path = ruta
+        img_pil = Image.open(ruta)
+        max_w = image_display_label.winfo_width() - 10
+        max_h = image_display_label.winfo_height() - 10
+        if max_w <= 0 or max_h <= 0:
+            max_w, max_h = 180, 140
+        img_pil.thumbnail((max_w, max_h), Image.LANCZOS)
+        tk_image_ref = ImageTk.PhotoImage(img_pil)
+        image_display_label.config(image=tk_image_ref, text="")
+        root.update_idletasks()
     except Exception as e:
-        status_label.config(text=f"Error al mostrar imagen: {e}")
-        return
+        status_label.config(text=f"Error al mostrar: {e}")
+        image_display_label.config(image=None, text="Error img")
+        tk_image_ref = None
 
-    # Clasificar
     resultado = classify_image(ruta)
-    status_label.config(text=f"Resultado: {resultado}")
-    boton.config(state=tk.DISABLED)
-    limpiar_boton.config(state=tk.NORMAL)
+    status_label.config(text=f"Es: {resultado}")
 
-# Función para limpiar interfaz
-def limpiar():
-    global last_photo_path
-    img_label.config(image='')
-    img_label.image = None
-    status_label.config(text="Esperando acción...")
-    boton.config(state=tk.NORMAL)
-    limpiar_boton.config(state=tk.DISABLED)
+    last_photo_path = ruta
+
+    foto_button.config(state=tk.DISABLED)
+    limpiar_button.config(state=tk.NORMAL)
+
+
+def limpiar_datos():
+    global last_photo_path, tk_image_ref
 
     if last_photo_path and os.path.exists(last_photo_path):
-        os.remove(last_photo_path)
-        last_photo_path = None
+        try:
+            os.remove(last_photo_path)
+        except OSError as e:
+            print(f"No se pudo eliminar {last_photo_path}: {e}")
+    last_photo_path = None
+
+    image_display_label.config(image=None, text="imagen", fg="blue")
+    tk_image_ref = None
+
+    status_label.config(text="Esperando...")
+
+    foto_button.config(state=tk.NORMAL)
+    limpiar_button.config(state=tk.DISABLED)
 
 # --- Interfaz con Tkinter ---
 root = tk.Tk()
-root.title("Detector de Perro o Gato")
-root.geometry("600x650")
+root.title("Detector")
+# Dimensiones target para pantalla pequeña (3.5")
+SCREEN_WIDTH = 480
+SCREEN_HEIGHT = 320
+root.geometry(f"{SCREEN_WIDTH}x{SCREEN_HEIGHT}")
 
-fuente_titulo = font.Font(size=20, weight='bold')
-fuente_estado = font.Font(size=14)
+# Función para redimensionar la imagen cuando cambia el widget
 
-titulo = tk.Label(root, text="¿Es Perro o Gato?", font=fuente_titulo)
-titulo.pack(pady=10)
+def resize_image_display(event):
+    global tk_image_ref
+    if last_photo_path and os.path.exists(last_photo_path):
+        try:
+            img_pil = Image.open(last_photo_path)
+            max_w = image_display_label.winfo_width() - 10
+            max_h = image_display_label.winfo_height() - 10
+            img_pil.thumbnail((max_w, max_h), Image.LANCZOS)
+            tk_image_ref = ImageTk.PhotoImage(img_pil)
+            image_display_label.config(image=tk_image_ref)
+        except Exception as e:
+            status_label.config(text=f"Error al redimensionar: {e}")
 
-img_label = tk.Label(root)
-img_label.pack(pady=10)
+# Root grid configurado
+root.grid_rowconfigure(0, weight=1)
+root.grid_columnconfigure(0, weight=1)
 
-boton = tk.Button(root, text="Tomar Foto", command=tomar_y_clasificar, width=20, height=2, font=font.Font(size=12))
-boton.pack(pady=10)
+main_frame = tk.Frame(root, padx=2, pady=2)
+main_frame.grid(row=0, column=0, sticky="nsew")
+main_frame.grid_rowconfigure(0, weight=1)
+main_frame.grid_columnconfigure(0, weight=3)
+main_frame.grid_columnconfigure(1, weight=2)
 
-limpiar_boton = tk.Button(root, text="Limpiar", command=limpiar, width=20, height=2, font=font.Font(size=12), state=tk.DISABLED)
-limpiar_boton.pack(pady=5)
+left_frame = tk.Frame(main_frame, bd=1, relief=tk.SOLID)
+left_frame.grid(row=0, column=0, sticky="nsew", padx=(0,2))
+left_frame.grid_rowconfigure(0, weight=1)
+left_frame.grid_columnconfigure(0, weight=1)
 
-status_label = tk.Label(root, text="Esperando acción...", font=fuente_estado)
-status_label.pack(pady=10)
+image_display_label = tk.Label(
+    left_frame,
+    text="imagen",
+    fg="blue",
+    font=font.Font(size=BASE_FONT_SIZE + 2)
+)
+image_display_label.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+# Bind para redimensionar responsivo
+image_display_label.bind("<Configure>", resize_image_display)
 
+right_frame = tk.Frame(main_frame, bd=1, relief=tk.SOLID)
+right_frame.grid(row=0, column=1, sticky="nsew", padx=(2,0))
+right_frame.grid_rowconfigure(0, weight=1)
+right_frame.grid_rowconfigure(1, weight=0)
+right_frame.grid_columnconfigure(0, weight=1)
+
+status_label_container = tk.Frame(right_frame, bd=1, relief=tk.SOLID)
+status_label_container.grid(row=0, column=0, sticky="nsew", pady=(2,2), padx=2)
+status_label_container.grid_rowconfigure(0, weight=1)
+status_label_container.grid_columnconfigure(0, weight=1)
+
+status_label = tk.Label(
+    status_label_container,
+    text="Esperando...",
+    font=font.Font(size=BASE_FONT_SIZE),
+    wraplength=(SCREEN_WIDTH * 2 // 5) - 20,
+    justify=tk.LEFT,
+    anchor="nw"
+)
+status_label.grid(row=0, column=0, sticky="nsew", padx=2, pady=2)
+
+buttons_container = tk.Frame(right_frame)
+buttons_container.grid(row=1, column=0, sticky="ew", pady=2, padx=2)
+buttons_container.grid_columnconfigure(0, weight=1)
+
+foto_button = tk.Button(
+    buttons_container,
+    text="foto",
+    command=tomar_y_clasificar,
+    font=font.Font(size=BASE_FONT_SIZE)
+)
+foto_button.grid(row=0, column=0, sticky="ew", pady=(2,1))
+
+limpiar_button = tk.Button(
+    buttons_container,
+    text="limpiar",
+    command=limpiar_datos,
+    font=font.Font(size=BASE_FONT_SIZE)
+)
+limpiar_button.grid(row=1, column=0, sticky="ew", pady=(1,2))
+limpiar_button.config(state=tk.DISABLED)
+
+root.update_idletasks()
 root.mainloop()

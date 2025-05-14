@@ -1,24 +1,25 @@
 import torch
 import torch.nn as nn
 from torchvision import models, transforms
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 import subprocess
 
 # Configurar dispositivo
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# Nombres de clases (ajusta estos nombres a los tuyos)
+# Lista de nombres de clases (ajústala a tu caso)
 class_names = ['clase0', 'clase1', 'clase2', 'clase3', 'clase4', 'clase5', 'clase6', 'clase7', 'clase8']
 
-# Capturar imagen con la cámara de la Raspberry Pi
+# Ruta de la imagen capturada
 image_path = "captura.jpg"
+
+# Capturar imagen con la cámara de Raspberry Pi
 subprocess.run(["raspistill", "-o", image_path, "-w", "640", "-h", "480", "-t", "1000"], check=True)
 
-# Cargar modelo SqueezeNet y ajustar la capa final a 9 clases
-modelo = models.squeezenet1_1(weights=None)
-modelo.classifier[1] = nn.Conv2d(512, 9, kernel_size=(1, 1), stride=(1, 1))
-modelo.num_classes = 9
-modelo.load_state_dict(torch.load("models/S15.pth", map_location=device))
+# Cargar modelo ResNet34 y modificar la última capa
+modelo = models.resnet34(pretrained=False)
+modelo.fc = nn.Linear(modelo.fc.in_features, 9)  # 9 clases
+modelo.load_state_dict(torch.load("R23.pth", map_location=device))
 modelo.to(device)
 modelo.eval()
 
@@ -31,19 +32,28 @@ transform = transforms.Compose([
                          [0.229, 0.224, 0.225])
 ])
 
-# Cargar y transformar la imagen
+# Cargar imagen original y convertir a RGB
 image_pil = Image.open(image_path).convert("RGB")
 image_tensor = transform(image_pil).unsqueeze(0).to(device)
 
-# Realizar la predicción
+# Realizar predicción
 with torch.no_grad():
     output = modelo(image_tensor)
     _, predicted = torch.max(output, 1)
     predicted_class = predicted.item()
 
-# Mostrar resultado
 predicted_class_name = class_names[predicted_class]
 print(f"✅ La clase predicha es: {predicted_class_name}")
 
-# Mostrar la imagen original (no normalizada) con el visor por defecto del sistema
-image_pil.show(title=f"Predicción: {predicted_class_name}")
+# Dibujar la clase predicha en la imagen
+draw = ImageDraw.Draw(image_pil)
+try:
+    # Usar fuente del sistema (opcional)
+    font = ImageFont.truetype("DejaVuSans-Bold.ttf", 24)
+except:
+    font = ImageFont.load_default()
+
+draw.text((10, 10), f"Predicción: {predicted_class_name}", fill="red", font=font)
+
+# Mostrar la imagen
+image_pil.show()

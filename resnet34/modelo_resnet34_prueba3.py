@@ -14,7 +14,8 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 # Definir nombres de clases (9 clases)
 class_names = ['clase0', 'clase1', 'clase2', 'clase3', 'clase4', 'clase5', 'clase6', 'clase7', 'clase8']
 
-# Cargar modelo ResNet34 y ajustar capa final\ nmodel = models.resnet34(pretrained=False)
+# Cargar modelo ResNet34 y ajustar capa final\ n
+model = models.resnet34(pretrained=False)
 model.fc = nn.Linear(model.fc.in_features, len(class_names))
 model.load_state_dict(torch.load('R23.pth', map_location=device))
 model.to(device)
